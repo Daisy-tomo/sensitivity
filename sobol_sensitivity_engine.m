@@ -477,7 +477,8 @@ end
 
 % E1. Cramer-Rao relative bounds (sorted by 1% noise scenario)
 [~, idx_cr] = sort(CR_bounds(:,1) ./ theta0(:), 'ascend');
-cr_plot = (CR_bounds(idx_cr, :) ./ theta0(idx_cr)' * 100);   % in %  (theta0 transposed to k×1 for broadcast)
+theta0_col = theta0(idx_cr);  theta0_col = theta0_col(:);  % force k×1 column
+cr_plot = bsxfun(@rdivide, CR_bounds(idx_cr, :), theta0_col) * 100;  % in %
 cr_plot(cr_plot > 200) = 200;    % cap display at 200%
 
 figure('Name', 'Identifiability: Cramer-Rao bounds', ...
