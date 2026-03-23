@@ -43,11 +43,11 @@ k = numel(theta0);   % number of parameters (13)
 %% =========================================================
 %  2.  OPERATING CONDITIONS  (edit here as needed)
 % ==========================================================
-cond.T_H      = 288;    % Ambient temperature [K]
-cond.M_flight = 0.0;    % Flight Mach number  [-]
-cond.m        = 10.0;   % Bypass ratio        [-]
-cond.pi_k     = 33.0;   % Compressor pressure ratio [-]
-cond.T_g      = 1700.0; % Turbine inlet temperature [K]
+opcond.T_H      = 288;    % Ambient temperature [K]
+opcond.M_flight = 0.0;    % Flight Mach number  [-]
+opcond.m        = 10.0;   % Bypass ratio        [-]
+opcond.pi_k     = 33.0;   % Compressor pressure ratio [-]
+opcond.T_g      = 1700.0; % Turbine inlet temperature [K]
 
 %% =========================================================
 %  3.  SOBOL SAMPLING SETTINGS
@@ -97,7 +97,7 @@ fail_B = 0;
 fprintf('Evaluating f(A) and f(B) ...\n');
 for i = 1:N
     try
-        [y, ~] = engine_forward(A(i,:), cond);
+        [y, ~] = engine_forward(A(i,:), opcond);
         if all(isfinite(y)) && all(y > 0)
             fA(i,:) = y;
         else
@@ -108,7 +108,7 @@ for i = 1:N
     end
 
     try
-        [y, ~] = engine_forward(B(i,:), cond);
+        [y, ~] = engine_forward(B(i,:), opcond);
         if all(isfinite(y)) && all(y > 0)
             fB(i,:) = y;
         else
@@ -136,7 +136,7 @@ for j = 1:k
 
     for i = 1:N
         try
-            [y, ~] = engine_forward(ABi(i,:), cond);
+            [y, ~] = engine_forward(ABi(i,:), opcond);
             if all(isfinite(y)) && all(y > 0)
                 fABi(i,:,j) = y;
             else
@@ -350,7 +350,7 @@ fprintf('  Identifiability Analysis (FIM)\n');
 fprintf('============================================\n');
 
 %% -- A. Evaluate model at nominal --
-[y0_raw, ~] = engine_forward(theta0, cond);
+[y0_raw, ~] = engine_forward(theta0, opcond);
 if ~all(isfinite(y0_raw)) || ~all(y0_raw > 0)
     error('engine_forward failed at nominal theta0 — check model inputs.');
 end
@@ -365,8 +365,8 @@ for j = 1:k
     theta_bwd = theta0;  theta_bwd(j) = theta0(j) * (1 - fd_step);
 
     try
-        [yf, ~] = engine_forward(theta_fwd, cond);
-        [yb, ~] = engine_forward(theta_bwd, cond);
+        [yf, ~] = engine_forward(theta_fwd, opcond);
+        [yb, ~] = engine_forward(theta_bwd, opcond);
         if all(isfinite(yf)) && all(isfinite(yb))
             J(:, j) = (yf(:) - yb(:)) / (2 * theta0(j) * fd_step);
         else
