@@ -203,8 +203,10 @@ for o = 1:n_out
         % Jansen estimator — total-order
         STi(j, o) = mean((fa - fab).^2) / (2 * VarY);
 
-        % Saltelli 2010 estimator — first-order
-        Si(j, o)  = mean(fb .* (fab - fa)) / VarY;
+        % Jansen estimator — first-order (more stable than Saltelli 2010;
+        % avoids spurious negative values for near-zero Si)
+        % Si = 1 - E[(fB - fABi)^2] / (2*Var(Y))
+        Si(j, o)  = 1 - mean((fb - fab).^2) / (2 * VarY);
     end
 end
 
@@ -289,8 +291,9 @@ for o = 1:n_out
     legend([b1, b2], {'S_i  (first-order)', 'ST_i  (total-order)'}, ...
            'Location', 'northeast', 'FontSize', 10);
 
-    y_top = max([STi_p; 0.05]);
-    ylim([min([Si_p; 0]) - 0.01, y_top * 1.18]);
+    y_top  = max([STi_p; 0.05]);
+    y_bot  = min([Si_p; STi_p; 0]);          % show negatives if they exist
+    ylim([y_bot - 0.01, y_top * 1.18]);
     grid on;  box on;
 
     % Annotate bar heights (skip very small values)
