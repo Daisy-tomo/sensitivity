@@ -390,8 +390,8 @@ for j = 1:k
 end
 
 %% -- C & D. FIM metrics for each noise scenario --
-noise_levels = [0.01, 0.03];   % 1 % and 3 % of y0
-noise_labels = {'1%', '3%'};
+noise_levels = [0.001, 0.01];  % 0.1 % and 1 % of y0
+noise_labels = {'0.1%', '1%'};
 n_noise      = numel(noise_levels);
 
 CR_bounds  = nan(k, n_noise);   % Cramer-Rao std dev per parameter, per noise
@@ -502,7 +502,7 @@ set(gca, 'XTick', x_cr, 'XTickLabel', param_names(idx_cr), ...
 ylabel('Relative CR bound  (%)', 'FontSize', 11);
 xlabel('Parameter (sorted by identifiability)', 'FontSize', 11);
 title('Cramer-Rao lower bounds — relative to \theta_0', 'FontSize', 12);
-legend([b_n1, b_n2], {'noise 1%', 'noise 3%'}, ...
+legend([b_n1, b_n2], {'noise 0.1%', 'noise 1%'}, ...
        'Location', 'northwest', 'FontSize', 10);
 ylim([0, min(max(cr_plot(:))*1.2, 210)]);
 grid on;  box on;
@@ -525,7 +525,7 @@ set(gca, 'XTick', 1:k, 'XTickLabel', pnames_sorted, ...
          'XTickLabelRotation', 40, 'FontSize', 9, ...
          'YTick', 1:k, 'YTickLabel', pnames_sorted, ...
          'TickLabelInterpreter', 'none');
-title('Parameter correlation matrix  |C_{ij}|  (noise 1%)', 'FontSize', 12);
+title('Parameter correlation matrix  |C_{ij}|  (noise 0.1%)', 'FontSize', 12);
 
 % Annotate cells with value
 for r = 1:k
@@ -552,7 +552,7 @@ STi_max = max(STi, [], 2);   % max STi across both outputs
 CR_rel1 = CR_bounds(:,1) ./ theta0(:) * 100;
 
 fprintf('  %-14s  %8s  %10s  %10s  %s\n', ...
-        'Parameter', 'STi_max', 'CR_rel_1%', 'Collinearity', 'Verdict');
+        'Parameter', 'STi_max', 'CR_rel_0.1%', 'Collinearity', 'Verdict');
 fprintf('  %s\n', repmat('-', 1, 62));
 
 for j = 1:k
