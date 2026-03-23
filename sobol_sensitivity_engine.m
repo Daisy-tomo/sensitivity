@@ -316,10 +316,274 @@ end
 
 fprintf('\n=== Analysis complete ===\n');
 
+%% =========================================================
+%  11.  PARAMETER IDENTIFIABILITY ANALYSIS
+%
+%  Step A — Jacobian at theta0 (central finite differences)
+%            J  [n_out x k],  J_ij = dy_i/dtheta_j
+%
+%  Step B — Normalised (relative) Jacobian
+%            Jn_ij = (theta0_j / y0_i) * J_ij    (dimensionless)
+%
+%  Step C — Fisher Information Matrix (FIM)
+%            F = J' * diag(1./sigma_obs.^2) * J
+%            Assumes independent Gaussian observation noise.
+%            Two noise scenarios are swept: 1 % and 3 % of y0.
+%
+%  Step D — Metrics derived from FIM
+%            * Condition number kappa(F)
+%            * Cramer-Rao lower bound: std_CR_i = sqrt( (F^-1)_ii )
+%            * Parameter correlation matrix C = D^-1 * F^-1 * D^-1
+%              where D = diag(sqrt(diag(F^-1)))
+%            * Collinearity index gamma_i: how much param i can be
+%              mimicked by linear combination of the others
+%              gamma_i = 1/sqrt(min eigenvalue of Jn'*Jn with col i removed)
+%              (large gamma_i => near-collinear => hard to identify alone)
+%
+%  Step E — Visualisation
+%            * Bar chart: normalised Cramer-Rao bounds per noise level
+%            * Heatmap: parameter correlation matrix
+% ==========================================================
+
+fprintf('\n============================================\n');
+fprintf('  Identifiability Analysis (FIM)\n');
+fprintf('============================================\n');
+
+%% -- A. Evaluate model at nominal --
+[y0_raw, ~] = engine_forward(theta0, cond);
+if ~all(isfinite(y0_raw)) || ~all(y0_raw > 0)
+    error('engine_forward failed at nominal theta0 — check model inputs.');
+end
+y0 = y0_raw(:);   % column vector [R_ud; C_ud]
+
+%% -- B. Jacobian via central finite differences --
+fd_step = 1e-4;   % relative step size
+J = zeros(n_out, k);
+
+for j = 1:k
+    theta_fwd = theta0;  theta_fwd(j) = theta0(j) * (1 + fd_step);
+    theta_bwd = theta0;  theta_bwd(j) = theta0(j) * (1 - fd_step);
+
+    try
+        [yf, ~] = engine_forward(theta_fwd, cond);
+        [yb, ~] = engine_forward(theta_bwd, cond);
+        if all(isfinite(yf)) && all(isfinite(yb))
+            J(:, j) = (yf(:) - yb(:)) / (2 * theta0(j) * fd_step);
+        else
+            warning('FD step failed for parameter %d (%s)', j, param_names{j});
+        end
+    catch
+        warning('FD step exception for parameter %d (%s)', j, param_names{j});
+    end
+end
+
+% Normalised (relative/dimensionless) Jacobian
+Jn = bsxfun(@rdivide, bsxfun(@times, J, theta0), y0);  % n_out x k
+
+fprintf('\nNominal outputs:  R_ud = %.4f m/s,  C_ud = %.6f kg/(N·h)\n', ...
+        y0(1), y0(2));
+fprintf('\nNormalised Jacobian  Jn_ij = (theta_j/y_i)*dy_i/dtheta_j:\n');
+fprintf('  %-14s  %10s  %10s\n', 'Parameter', 'dR_ud', 'dC_ud');
+fprintf('  %s\n', repmat('-', 1, 38));
+for j = 1:k
+    fprintf('  %-14s  %10.4f  %10.4f\n', param_names{j}, Jn(1,j), Jn(2,j));
+end
+
+%% -- C & D. FIM metrics for each noise scenario --
+noise_levels = [0.01, 0.03];   % 1 % and 3 % of y0
+noise_labels = {'1%', '3%'};
+n_noise      = numel(noise_levels);
+
+CR_bounds  = nan(k, n_noise);   % Cramer-Rao std dev per parameter, per noise
+kappa_F    = nan(1, n_noise);   % condition numbers
+Corr_all   = cell(1, n_noise);  % correlation matrices
+
+for ni = 1:n_noise
+    sigma_obs = noise_levels(ni) * y0;          % absolute noise per output
+    W         = diag(1 ./ sigma_obs.^2);        % n_out x n_out weight matrix
+    F         = J' * W * J;                     % k x k FIM
+
+    kappa_F(ni) = cond(F);
+
+    % Invert FIM (use pinv for near-singular cases)
+    tol_pinv = max(size(F)) * eps(norm(F));
+    Finv     = pinv(F, tol_pinv);
+
+    % Cramer-Rao lower bounds
+    cr_var = diag(Finv);
+    cr_var(cr_var < 0) = NaN;           % negative => parameter not identified
+    CR_bounds(:, ni) = sqrt(cr_var);
+
+    % Normalise CR bound relative to theta0 (as %)
+    CR_rel = CR_bounds(:, ni) ./ theta0(:) * 100;
+
+    fprintf('\n--- Noise scenario: %s of y0  (sigma_R=%.3f, sigma_C=%.5f) ---\n', ...
+            noise_labels{ni}, sigma_obs(1), sigma_obs(2));
+    fprintf('  Condition number of FIM: %.3e\n', kappa_F(ni));
+    fprintf('  %-14s  %12s  %12s\n', 'Parameter', 'CR std dev', 'CR rel (%)');
+    fprintf('  %s\n', repmat('-', 1, 44));
+
+    % Sort by CR_rel ascending (best identified first)
+    [cr_sorted, idx_s] = sort(CR_rel, 'ascend');
+    for j = 1:k
+        if isnan(cr_sorted(j))
+            flag = '  [NOT IDENTIFIABLE]';
+        elseif cr_sorted(j) < 5
+            flag = '  *** well identified';
+        elseif cr_sorted(j) < 20
+            flag = '  ** marginally identified';
+        else
+            flag = '  *  poorly identified';
+        end
+        fprintf('  %-14s  %12.4f  %11.2f%%%s\n', ...
+                param_names{idx_s(j)}, CR_bounds(idx_s(j),ni), cr_sorted(j), flag);
+    end
+
+    % Parameter correlation matrix from FIM inverse
+    D_inv   = diag(1 ./ sqrt(max(diag(Finv), eps)));
+    Corr    = D_inv * Finv * D_inv;
+    Corr_all{ni} = Corr;
+end
+
+%% -- D.  Collinearity index (based on normalised Jacobian) --
+fprintf('\n--- Collinearity index (normalised Jacobian, gamma_i) ---\n');
+fprintf('  gamma_i > 15 : near-collinear, Bayesian prior strongly needed\n');
+fprintf('  %-14s  %12s\n', 'Parameter', 'gamma_i');
+fprintf('  %s\n', repmat('-', 1, 30));
+
+gamma = nan(1, k);
+for j = 1:k
+    cols_excl = setdiff(1:k, j);
+    Jn_sub    = Jn(:, cols_excl);
+    ev        = eig(Jn_sub' * Jn_sub);
+    ev_min    = min(ev(ev > 0));
+    if ~isempty(ev_min) && isfinite(ev_min) && ev_min > 0
+        gamma(j) = 1 / sqrt(ev_min);
+    end
+end
+[gamma_s, idx_g] = sort(gamma, 'descend');
+for j = 1:k
+    if gamma_s(j) > 15
+        flag = '  *** near-collinear';
+    elseif gamma_s(j) > 5
+        flag = '  **  moderate';
+    else
+        flag = '';
+    end
+    fprintf('  %-14s  %12.2f%s\n', param_names{idx_g(j)}, gamma_s(j), flag);
+end
+
+%% -- E.  Visualisation --
+
+% E1. Cramer-Rao relative bounds (sorted by 1% noise scenario)
+[~, idx_cr] = sort(CR_bounds(:,1) ./ theta0(:), 'ascend');
+cr_plot = (CR_bounds(idx_cr, :) ./ theta0(idx_cr) * 100);   % in %
+cr_plot(cr_plot > 200) = 200;    % cap display at 200%
+
+figure('Name', 'Identifiability: Cramer-Rao bounds', ...
+       'NumberTitle', 'off', 'Position', [80, 600, 700, 400]);
+
+bw2   = 0.35;
+x_cr  = 1:k;
+c_n1  = [0.20 0.63 0.37];
+c_n2  = [0.93 0.65 0.13];
+
+b_n1 = bar(x_cr - bw2/2, cr_plot(:,1), bw2, 'FaceColor', c_n1, 'EdgeColor', 'none');
+hold on;
+b_n2 = bar(x_cr + bw2/2, cr_plot(:,2), bw2, 'FaceColor', c_n2, 'EdgeColor', 'none');
+yline(5,  '--', '5% threshold',  'Color', [0.3 0.3 0.8], 'LineWidth', 1.2);
+yline(20, '--', '20% threshold', 'Color', [0.8 0.2 0.2], 'LineWidth', 1.2);
+hold off;
+
+set(gca, 'XTick', x_cr, 'XTickLabel', param_names(idx_cr), ...
+         'XTickLabelRotation', 40, 'FontSize', 10, ...
+         'TickLabelInterpreter', 'none');
+ylabel('Relative CR bound  (%)', 'FontSize', 11);
+xlabel('Parameter (sorted by identifiability)', 'FontSize', 11);
+title('Cramer-Rao lower bounds — relative to \theta_0', 'FontSize', 12);
+legend([b_n1, b_n2], {'noise 1%', 'noise 3%'}, ...
+       'Location', 'northwest', 'FontSize', 10);
+ylim([0, min(max(cr_plot(:))*1.2, 210)]);
+grid on;  box on;
+
+% E2. Parameter correlation matrix (1% noise, sorted same as CR chart)
+Corr_plot = Corr_all{1}(idx_cr, idx_cr);
+pnames_sorted = param_names(idx_cr);
+
+figure('Name', 'Identifiability: Correlation matrix', ...
+       'NumberTitle', 'off', 'Position', [800, 600, 560, 480]);
+
+imagesc(abs(Corr_plot));
+colormap(flipud(hot));
+clim([0, 1]);
+cb = colorbar;
+cb.Label.String = '|Correlation|';
+cb.FontSize = 10;
+
+set(gca, 'XTick', 1:k, 'XTickLabel', pnames_sorted, ...
+         'XTickLabelRotation', 40, 'FontSize', 9, ...
+         'YTick', 1:k, 'YTickLabel', pnames_sorted, ...
+         'TickLabelInterpreter', 'none');
+title('Parameter correlation matrix  |C_{ij}|  (noise 1%)', 'FontSize', 12);
+
+% Annotate cells with value
+for r = 1:k
+    for c = 1:k
+        v = abs(Corr_plot(r,c));
+        if v > 0.3
+            text(c, r, sprintf('%.2f', v), ...
+                 'HorizontalAlignment', 'center', ...
+                 'FontSize', 7, ...
+                 'Color', ifelse_color(v));
+        end
+    end
+end
+
+fprintf('\n=== Identifiability analysis complete ===\n');
+
+%% -- Summary recommendation table --
+fprintf('\n============================================================\n');
+fprintf('  Parameter Selection Summary for Bayesian Inversion\n');
+fprintf('============================================================\n');
+fprintf('  Criteria: STi(R_ud or C_ud) > 0.05  AND  CR_rel(1%%) < 20%%\n\n');
+
+STi_max = max(STi, [], 2);   % max STi across both outputs
+CR_rel1 = CR_bounds(:,1) ./ theta0(:) * 100;
+
+fprintf('  %-14s  %8s  %10s  %10s  %s\n', ...
+        'Parameter', 'STi_max', 'CR_rel_1%', 'Collinearity', 'Verdict');
+fprintf('  %s\n', repmat('-', 1, 62));
+
+for j = 1:k
+    sti_j = STi_max(j);
+    cr_j  = CR_rel1(j);
+    gam_j = gamma(j);
+
+    if sti_j >= 0.05 && cr_j < 20
+        verdict = 'INCLUDE';
+    elseif sti_j >= 0.02 && cr_j < 50
+        verdict = 'consider';
+    else
+        verdict = 'fix at prior';
+    end
+
+    fprintf('  %-14s  %8.3f  %10.1f  %10.2f  %s\n', ...
+            param_names{j}, sti_j, cr_j, gam_j, verdict);
+end
+
 
 %% =========================================================
 %%  LOCAL HELPER  (not a model function)
 % ==========================================================
+
+function c = ifelse_color(v)
+% White text for dark cells, black for light cells
+if v > 0.6
+    c = [1 1 1];
+else
+    c = [0 0 0];
+end
+end
 function s = format_val(v)
 % Return formatted string; 'NaN' if not finite.
 if isfinite(v)
